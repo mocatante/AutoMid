@@ -1,0 +1,96 @@
+#include <Keyboard.h>
+
+// 协议字符定义
+#define CMD_INIT 'I'    // 握手请求
+#define CMD_PING 'P'    // 心跳
+#define CMD_PRESS 'K'   // 按下：格式 K:a
+#define CMD_RELEASE 'R' // 释放：格式 R:a
+#define CMD_STOP 'X'    // 停止所有
+
+String inputBuffer = "";
+bool initialized = false;
+
+void setup() {
+  Serial.begin(115200);
+  Keyboard.begin();
+  
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void loop() {
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+    
+    if (c == '\n') {
+      processCommand(inputBuffer);
+      inputBuffer = "";
+    } else {
+      inputBuffer += c;
+    }
+  }
+}
+
+void pressKey(char key) {
+  // 检查是否是允许的字符
+  if ((key >= 'a' && key <= 'z') || 
+      (key >= '0' && key <= '9') || 
+      key == '-' || key == '=' || key == '[' || key == ']' || 
+      key == '\\' || key == ';' || key == '\'' || 
+      key == ',' || key == '.' || key == '/') {
+    Keyboard.press(key);
+  }
+}
+
+void releaseKey(char key) {
+  // 检查是否是允许的字符
+  if ((key >= 'a' && key <= 'z') || 
+      (key >= '0' && key <= '9') || 
+      key == '-' || key == '=' || key == '[' || key == ']' || 
+      key == '\\' || key == ';' || key == '\'' || 
+      key == ',' || key == '.' || key == '/') {
+    Keyboard.release(key);
+  }
+}
+
+void processCommand(String cmd) {
+  if (cmd.length() == 0) return;
+  
+  char type = cmd.charAt(0);
+  
+  switch (type) {
+    case CMD_INIT:
+      // 握手响应
+      Serial.println("R");
+      initialized = true;
+      digitalWrite(LED_BUILTIN, HIGH); // 灯亮表示已连接
+      break;
+      
+    case CMD_PING:
+      // 心跳回应
+      Serial.println("PONG");
+      break;
+      
+    case CMD_STOP:
+      // 紧急释放
+      Keyboard.releaseAll();
+      Serial.println("X");
+      break;
+      
+    case CMD_PRESS:
+      // 格式：K:a
+      if (cmd.length() >= 3 && cmd.charAt(1) == ':') {
+        char key = cmd.charAt(2);
+        pressKey(key);
+      }
+      break;
+      
+    case CMD_RELEASE:
+      // 格式：R:a
+      if (cmd.length() >= 3 && cmd.charAt(1) == ':') {
+        char key = cmd.charAt(2);
+        releaseKey(key);
+      }
+      break;
+  }
+}
