@@ -24,18 +24,12 @@ wheels/
 *.manifest
 *.spec
 
-# 可执行文件
-*.exe
-
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# 输出文件
-out/
 
 # 系统文件
 .DS_Store
