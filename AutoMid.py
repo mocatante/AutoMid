@@ -32,11 +32,7 @@ def get_base_dir():
 
 
 def get_pitch_map(ini_filename="map.ini", section="PitchMap"):
-    """
-    读取map.ini，构建数字音高→字符的映射字典
-    优先从exe同级目录读取，失败则尝试多个备选路径
-    返回 (pitch_map, status_message)
-    """
+    """读取map.ini，构建数字音高→字符的映射字典"""
     base_dir = get_base_dir()
     ini_path = os.path.join(base_dir, ini_filename)
 
@@ -650,7 +646,6 @@ class AutoMidWindow(QMainWindow):
         main_layout.addLayout(bottom_layout, stretch=1)
 
     def toggle_always_on_top(self, state):
-        """切换窗口顶置状态"""
         if state == Qt.Checked:
             self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         else:
@@ -887,274 +882,6 @@ class AutoMidWindow(QMainWindow):
             QMessageBox.critical(self, "导出失败", str(e))
 
 
-class MidiOptimizer(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("MIDI优化")
-        self.folder = ""
-        self.files = []
-        self.init_ui()
-
-    def init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(15, 15, 15, 15)
-
-        row1 = QHBoxLayout()
-        self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("选择文件夹...")
-        self.path_edit.setReadOnly(True)
-        btn_browse = QPushButton("浏览...")
-        btn_browse.setFixedWidth(60)
-        btn_browse.clicked.connect(self.browse_folder)
-        row1.addWidget(self.path_edit)
-        row1.addWidget(btn_browse)
-        layout.addLayout(row1)
-
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("文件:"))
-        self.file_combo = QComboBox()
-        self.file_combo.setEnabled(False)
-        row2.addWidget(self.file_combo, 1)
-
-        row2.addWidget(QLabel("限制:"))
-        self.limit_combo = QComboBox()
-        self.limit_combo.setFixedWidth(50)
-        for i in range(1, 7):
-            self.limit_combo.addItem(str(i), i)
-        self.limit_combo.setCurrentIndex(5)
-        row2.addWidget(self.limit_combo)
-        layout.addLayout(row2)
-
-        self.btn_optimize = QPushButton("🚀 优化")
-        self.btn_optimize.setEnabled(False)
-        self.btn_optimize.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 8px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #1976D2; }
-            QPushButton:disabled { background-color: #ccc; }
-        """)
-        self.btn_optimize.clicked.connect(self.optimize)
-        layout.addWidget(self.btn_optimize)
-
-    def browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
-        if folder:
-            self.folder = folder
-            self.path_edit.setText(folder)
-            self.refresh_files()
-
-    def refresh_files(self):
-        self.file_combo.clear()
-        self.files = [f for f in os.listdir(self.folder) if f.endswith('.txt')]
-
-        if not self.files:
-            QMessageBox.warning(self, "提示", "该文件夹没有txt文件")
-            self.file_combo.setEnabled(False)
-            self.btn_optimize.setEnabled(False)
-            return
-
-        for f in self.files:
-            self.file_combo.addItem(f, os.path.join(self.folder, f))
-
-        self.file_combo.setEnabled(True)
-        self.btn_optimize.setEnabled(True)
-
-    def parse_file(self, filepath):
-        events = []
-        with open(filepath, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split('\t')
-                if len(parts) != 3:
-                    continue
-                t, k, ts = parts
-                if t not in ('P', 'R'):
-                    continue
-                try:
-                    ts = int(ts)
-                except:
-                    continue
-                events.append({'type': t, 'key': k, 'timestamp': ts, 'processed': False})
-        return events
-
-    def process(self, events, max_active):
-        pitch_dup = release_adv = press_delay = bad = 0
-        active = []
-        i = 0
-
-        while i < len(events):
-            e = events[i]
-            if e['processed']:
-                i += 1
-                continue
-
-            if e['type'] == 'P':
-                exist_idx = None
-                for idx, a in enumerate(active):
-                    if a['key'] == e['key']:
-                        exist_idx = idx
-                        break
-
-                if exist_idx is not None:
-                    pitch_dup += 1
-                    old = active[exist_idx]
-                    for j in range(i+1, len(events)):
-                        if events[j]['type'] == 'R' and events[j]['key'] == e['key'] and not events[j]['processed']:
-                            events[j]['processed'] = True
-                            break
-                    if e['timestamp'] - old['timestamp'] > 80:
-                        new_ts = e['timestamp'] - 40
-                    else:
-                        new_ts = (old['timestamp'] + e['timestamp']) // 2
-                        bad += 1
-                    events.insert(i, {'type': 'R', 'key': e['key'], 'timestamp': new_ts, 'processed': False})
-                    i += 1
-                    active.pop(exist_idx)
-                    active.append(e)
-                    i += 1
-                    continue
-
-                elif len(active) >= max_active:
-                    oldest = active[0]
-                    for j in range(i+1, len(events)):
-                        if events[j]['type'] == 'R' and events[j]['key'] == oldest['key'] and not events[j]['processed']:
-                            events[j]['processed'] = True
-                            break
-
-                    if e['timestamp'] - oldest['timestamp'] > 40:
-                        release_adv += 1
-                        new_ts = e['timestamp']
-                    else:
-                        press_delay += 1
-                        new_ts = oldest['timestamp'] + 40
-                        e['timestamp'] = new_ts
-
-                    events.insert(i, {'type': 'R', 'key': oldest['key'], 'timestamp': new_ts, 'processed': False})
-                    i += 1
-                    active.pop(0)
-                    active.append(e)
-                    i += 1
-                    continue
-                else:
-                    active.append(e)
-                    i += 1
-                    continue
-
-            elif e['type'] == 'R':
-                if not e['processed']:
-                    for idx, a in enumerate(active):
-                        if a['key'] == e['key']:
-                            active.pop(idx)
-                            break
-                i += 1
-                continue
-
-            i += 1
-
-        result = [e for e in events if not e['processed']]
-        result.sort(key=lambda x: (x['timestamp'], 0 if x['type'] == 'R' else 1))
-        for e in result:
-            e.pop('processed', None)
-
-        # ===== 后处理：保证同键 R -> P 之间最小间隙，同时保证音符最小持续时间 =====
-        MIN_GAP_MS = 40
-        MIN_NOTE_MS = 40
-        extra_bad = 0
-
-        i = 0
-        while i < len(result):
-            e = result[i]
-            if e['type'] == 'R':
-                next_p = None
-                for j in range(i + 1, len(result)):
-                    if result[j]['key'] == e['key'] and result[j]['type'] == 'P':
-                        next_p = result[j]
-                        break
-                if next_p is not None:
-                    r_time = e['timestamp']
-                    p_time = next_p['timestamp']
-                    gap = p_time - r_time
-                    if gap < MIN_GAP_MS:
-                        prev_p = None
-                        for j in range(i - 1, -1, -1):
-                            if result[j]['key'] == e['key'] and result[j]['type'] == 'P':
-                                prev_p = result[j]
-                                break
-                        if prev_p is not None:
-                            prev_p_time = prev_p['timestamp']
-                            new_r_time = p_time - MIN_GAP_MS
-                            if new_r_time >= prev_p_time + MIN_NOTE_MS:
-                                e['timestamp'] = new_r_time
-                            else:
-                                new_r_time = prev_p_time + MIN_NOTE_MS
-                                e['timestamp'] = new_r_time
-                                new_p_time = max(p_time, new_r_time + MIN_GAP_MS)
-                                next_p['timestamp'] = new_p_time
-                                extra_bad += 1
-                        else:
-                            e['timestamp'] = p_time - MIN_GAP_MS
-            i += 1
-
-        result.sort(key=lambda x: (x['timestamp'], 0 if x['type'] == 'R' else 1))
-        bad += extra_bad
-        # ===== 后处理结束 =====
-
-        return result, pitch_dup, release_adv, press_delay, bad
-
-    def save_result(self, result, orig_path, max_active):
-        dir_path = os.path.dirname(os.path.abspath(orig_path))
-        basename = os.path.basename(orig_path)
-        new_name = f"[M{max_active}]{basename}"
-        out_path = os.path.join(dir_path, new_name)
-
-        with open(out_path, 'w', encoding='utf-8') as f:
-            for e in result:
-                f.write(f"{e['type']}\t{e['key']}\t{e['timestamp']}\n")
-        return out_path
-
-    def optimize(self):
-        if self.file_combo.currentIndex() < 0:
-            QMessageBox.warning(self, "提示", "请先选择文件")
-            return
-
-        filepath = self.file_combo.currentData()
-        max_active = self.limit_combo.currentData()
-
-        try:
-            events = self.parse_file(filepath)
-            total = len(events)
-
-            if total == 0:
-                QMessageBox.warning(self, "错误", "文件为空或格式错误")
-                return
-
-            result, dup, adv, delay, bad = self.process(events, max_active)
-            out_path = self.save_result(result, filepath, max_active)
-
-            msg = f"✅ 优化完成！\n\n"
-            msg += f"原始事件: {total}\n"
-            msg += f"同音重复: {dup}\n"
-            msg += f"提前释放: {adv}\n"
-            msg += f"推迟按下: {delay}\n"
-            msg += f"不理想处理: {bad}\n"
-            msg += f"输出事件: {len(result)}\n\n"
-            msg += f"保存至: {os.path.basename(out_path)}"
-
-            QMessageBox.information(self, "完成", msg)
-
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"处理失败: {str(e)}")
-
-
 # ==================== 键盘输出后端 ====================
 
 class ArduinoOutput:
@@ -1300,7 +1027,6 @@ class WinApiOutput:
         )
         self.user32.SendInput.restype = ctypes.c_uint
 
-        # 字母数字 -> VK 码
         self.vk_map = {}
         for c in 'abcdefghijklmnopqrstuvwxyz':
             self.vk_map[c] = ord(c.upper())
@@ -1389,7 +1115,9 @@ class KeyPlayer:
         self.events = []
         self.thread = None
         self.speed = 1.0
-        self.max_active = 0  # 默认无处理
+        self.max_active = 0       # 默认无处理
+        self.min_note_ms = 40     # 一个音最小持续时间
+        self.min_gap_ms = 40      # 释放到下一次按下的最小间隔
         self._lock = threading.Lock()
 
     def set_max_active(self, max_active):
@@ -1397,8 +1125,12 @@ class KeyPlayer:
         self.max_active = max_active
 
     def parse_txt(self, path):
-        """解析 TSV 并处理按键限制"""
+        """解析 TSV 并处理按键限制
+        顺序：读时间戳 → 按播放页倍速缩放 → 做 0~6 限制
+        """
         raw_events = []
+        speed_factor = 1.0 / self.speed if self.speed > 0 else 1.0
+
         with open(path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
@@ -1410,6 +1142,8 @@ class KeyPlayer:
                     try:
                         t_clean = ''.join(c for c in t_str if c.isdigit())
                         t = int(t_clean)
+                        # 先应用播放页倍速
+                        t = int(round(t * speed_factor))
                         if key and key[0].isalnum():
                             raw_events.append({
                                 'type': evt_type,
@@ -1478,8 +1212,8 @@ class KeyPlayer:
                         if events[j]['type'] == 'R' and events[j]['key'] == e['key'] and not events[j]['processed']:
                             events[j]['processed'] = True
                             break
-                    if e['timestamp'] - old['timestamp'] > 80:
-                        new_ts = e['timestamp'] - 40
+                    if e['timestamp'] - old['timestamp'] > 2 * self.min_gap_ms:
+                        new_ts = e['timestamp'] - self.min_gap_ms
                     else:
                         new_ts = (old['timestamp'] + e['timestamp']) // 2
                         bad += 1
@@ -1497,12 +1231,12 @@ class KeyPlayer:
                             events[j]['processed'] = True
                             break
 
-                    if e['timestamp'] - oldest['timestamp'] > 40:
+                    if e['timestamp'] - oldest['timestamp'] > self.min_note_ms:
                         release_adv += 1
                         new_ts = e['timestamp']
                     else:
                         press_delay += 1
-                        new_ts = oldest['timestamp'] + 40
+                        new_ts = oldest['timestamp'] + self.min_note_ms
                         e['timestamp'] = new_ts
 
                     events.insert(i, {'type': 'R', 'key': oldest['key'], 'timestamp': new_ts, 'processed': False})
@@ -1533,8 +1267,8 @@ class KeyPlayer:
             e.pop('processed', None)
 
         # ===== 后处理：保证同键 R -> P 之间最小间隙，同时保证音符最小持续时间 =====
-        MIN_GAP_MS = 40
-        MIN_NOTE_MS = 40
+        MIN_GAP_MS = self.min_gap_ms
+        MIN_NOTE_MS = self.min_note_ms
         extra_bad = 0
 
         i = 0
@@ -1578,7 +1312,7 @@ class KeyPlayer:
         return result, pitch_dup, release_adv, press_delay, bad
 
     def _play_loop(self, delay_ms: int, stop_requested_flag):
-        """播放循环 - 使用超时机制确保可中断"""
+        """播放循环 - 时间轴已在 parse_txt 里缩放完毕，此处直接用"""
         try:
             self.is_playing = True
 
@@ -1596,11 +1330,10 @@ class KeyPlayer:
             start_ns = time.perf_counter_ns()
             idx = 0
             total = len(self.events)
-            speed_factor = 1.0 / self.speed
 
             while idx < total and not self._stop.is_set():
                 evt = self.events[idx]
-                target_ns = start_ns + int(evt['time_ms'] * speed_factor * 1_000_000)
+                target_ns = start_ns + int(evt['time_ms'] * 1_000_000)
                 current_ns = time.perf_counter_ns()
 
                 if current_ns >= target_ns:
@@ -1641,11 +1374,11 @@ class KeyPlayer:
             if self.is_playing:
                 return False, None
 
+            self.speed = speed  # 必须先设置，parse_txt 里要用
             self.events, poly_stats = self.parse_txt(path)
             if not self.events:
                 return False, None
 
-            self.speed = speed
             self._stop.clear()
             self.is_playing = True
 
@@ -1805,6 +1538,44 @@ class AutoKeyWidget(QWidget):
 
         layout.addLayout(row2)
 
+        # ---- 最小音长 / 最小间隔 ----
+        row3 = QHBoxLayout()
+        row3.setSpacing(6)
+
+        note_label = QLabel("最小音长:")
+        note_label.setFixedHeight(26)
+        row3.addWidget(note_label)
+
+        self.min_note_input = QLineEdit("40")
+        self.min_note_input.setFixedSize(55, 26)
+        self.min_note_input.setValidator(QIntValidator(0, 1000))
+        self.min_note_input.setAlignment(Qt.AlignCenter)
+        self.min_note_input.textChanged.connect(self._on_gap_params_changed)
+        row3.addWidget(self.min_note_input)
+
+        gap_label = QLabel("最小间隔:")
+        gap_label.setFixedHeight(26)
+        row3.addWidget(gap_label)
+
+        self.min_gap_input = QLineEdit("40")
+        self.min_gap_input.setFixedSize(55, 26)
+        self.min_gap_input.setValidator(QIntValidator(0, 1000))
+        self.min_gap_input.setAlignment(Qt.AlignCenter)
+        self.min_gap_input.textChanged.connect(self._on_gap_params_changed)
+        row3.addWidget(self.min_gap_input)
+
+        unit_label = QLabel("ms")
+        unit_label.setFixedHeight(26)
+        row3.addWidget(unit_label)
+
+        tip_label = QLabel("（仅限制音模式生效；时间轴已含播放页倍速）")
+        tip_label.setStyleSheet("color: #888; font-size: 10px;")
+        tip_label.setFixedHeight(26)
+        row3.addWidget(tip_label)
+
+        row3.addStretch(1)
+        layout.addLayout(row3)
+
         self.poly_result_text = QLabel("Poly处理结果将显示在这里")
         self.poly_result_text.setStyleSheet("""
             QLabel {
@@ -1822,6 +1593,18 @@ class AutoKeyWidget(QWidget):
         layout.addWidget(self.poly_result_text)
 
         self.arduino_changed.connect(self._update_status)
+
+    def _on_gap_params_changed(self, text):
+        try:
+            v = int(self.min_note_input.text() or "40")
+            self.player.min_note_ms = max(0, v)
+        except ValueError:
+            pass
+        try:
+            v = int(self.min_gap_input.text() or "40")
+            self.player.min_gap_ms = max(0, v)
+        except ValueError:
+            pass
 
     def _on_file_changed(self, text):
         self._update_play_button_state()
@@ -2037,7 +1820,6 @@ class AutoKeyWidget(QWidget):
         if self.arduino:
             self.arduino._alive = False
 
-        # 只有当前是 Arduino 模式才清空输出，避免影响模拟模式
         if self.mode_combo.currentData() == "arduino":
             self.player.output = None
 
@@ -2057,10 +1839,7 @@ class AutoKeyWidget(QWidget):
         self.port_name = ""
 
         if was_connected:
-            if self.mode_combo.currentData() == "sim":
-                # 模拟模式不显示 Arduino 状态
-                pass
-            else:
+            if self.mode_combo.currentData() != "sim":
                 self.arduino_changed.emit(False, "未连接")
             self._update_play_button_state()
 
@@ -2155,7 +1934,6 @@ class AutoKeyWidget(QWidget):
             mode = self.mode_combo.currentData()
 
             if mode == "sim":
-                # 每次播放前重新创建一个 WinApiOutput，避免残留状态
                 self.player.output = WinApiOutput()
             else:
                 if not self.arduino:
@@ -2184,31 +1962,18 @@ class AutoKeyWidget(QWidget):
                         result_text += f"推迟按下: {poly_stats['press_delay']}\n"
                         result_text += f"不理想处理: {poly_stats['bad']}\n"
                         result_text += f"输出事件: {poly_stats['output']}\n"
-                        result_text += f"限制按键数: {max_active}\n\n"
-
-                        base_dir = get_base_dir()
-                        out_dir = os.path.join(base_dir, "out")
-                        os.makedirs(out_dir, exist_ok=True)
-
-                        file_name = os.path.basename(path)
-                        base_name, ext = os.path.splitext(file_name)
-                        processed_file_name = f"[M{max_active}]{base_name}{ext}"
-                        processed_file_path = os.path.join(out_dir, processed_file_name)
-
-                        with open(processed_file_path, 'w', encoding='utf-8') as f:
-                            for event in self.player.events:
-                                evt_type = 'P' if event['is_press'] else 'R'
-                                f.write(f"{evt_type}\t{event['key']}\t{event['time_ms']}\n")
-
-                        result_text += f"已生成处理文件: {processed_file_name}\n"
-                        result_text += f"保存位置: {out_dir}\n\n"
-                        result_text += f"正在播放..."
+                        result_text += f"限制按键数: {max_active}\n"
+                        result_text += f"最小音长: {self.player.min_note_ms}ms\n"
+                        result_text += f"最小间隔: {self.player.min_gap_ms}ms\n"
+                        result_text += f"播放页倍速: {self.player.speed}x\n\n"
+                        result_text += f"正在播放...（不生成文件）"
                     else:
                         result_text = f"Poly处理结果:\n"
                         result_text += f"原始事件: {poly_stats['total']}\n"
                         result_text += f"输出事件: {poly_stats['output']}\n"
-                        result_text += f"限制按键数: 无处理\n\n"
-                        result_text += f"正在播放..."
+                        result_text += f"限制按键数: 无处理\n"
+                        result_text += f"播放页倍速: {self.player.speed}x\n\n"
+                        result_text += f"正在播放...（不生成文件）"
                     self.poly_result_text.setText(result_text)
                 else:
                     self.poly_result_text.setText("Poly处理结果将显示在这里")
@@ -2229,7 +1994,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AutoMid")
-        self.setFixedSize(680, 320)
+        self.setFixedSize(680, 340)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -2238,14 +2003,20 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
 
         top_layout = QHBoxLayout()
+
         self.always_on_top_checkbox = QCheckBox("窗口顶置")
         self.always_on_top_checkbox.setFont(QFont("微软雅黑", 9))
         self.always_on_top_checkbox.stateChanged.connect(self.toggle_always_on_top)
         top_layout.addWidget(self.always_on_top_checkbox)
 
-        self.status_label = QLabel("就绪")
+        self.admin_btn = QPushButton("以管理员重启")
+        self.admin_btn.setFont(QFont("微软雅黑", 9))
+        self.admin_btn.setFixedHeight(24)
+        self.admin_btn.clicked.connect(self.restart_as_admin)
+        top_layout.addWidget(self.admin_btn)
+
+        self.status_label = QLabel()
         self.status_label.setFont(QFont("微软雅黑", 9))
-        self.status_label.setStyleSheet("color: #27ae60;")
         top_layout.addStretch(1)
         top_layout.addWidget(self.status_label)
         main_layout.addLayout(top_layout)
@@ -2258,6 +2029,60 @@ class MainWindow(QMainWindow):
 
         self.tab_widget.addTab(self.mid_translator_tab, "MIDI转换")
         self.tab_widget.addTab(self.auto_key_tab, "AutoKey")
+
+        self._refresh_admin_status()
+
+    def is_admin(self):
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except Exception:
+            return False
+
+    def _refresh_admin_status(self):
+        if self.is_admin():
+            self.status_label.setText("管理员权限")
+            self.status_label.setStyleSheet("color: #c0392b; font-weight: bold;")
+            self.admin_btn.setEnabled(False)
+            self.admin_btn.setToolTip("当前已是管理员权限")
+        else:
+            self.status_label.setText("普通权限")
+            self.status_label.setStyleSheet("color: #27ae60;")
+            self.admin_btn.setEnabled(True)
+            self.admin_btn.setToolTip("以管理员身份重新启动，游戏需要管理员时使用")
+
+    def restart_as_admin(self):
+        if self.is_admin():
+            QMessageBox.information(self, "提示", "当前已经是管理员权限")
+            return
+
+        if getattr(sys, 'frozen', False):
+            exe = sys.executable
+            params = ""
+        else:
+            exe = sys.executable
+            script = os.path.abspath(sys.argv[0])
+            params = f'"{script}"'
+
+        try:
+            ret = ctypes.windll.shell32.ShellExecuteW(
+                None,
+                "runas",
+                exe,
+                params,
+                None,
+                1,
+            )
+            if ret <= 32:
+                QMessageBox.warning(
+                    self, "提示",
+                    "提权启动失败（可能被用户取消）"
+                )
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"提权启动失败: {e}")
+            return
+
+        QApplication.quit()
 
     def toggle_always_on_top(self, state):
         """切换窗口顶置状态"""
